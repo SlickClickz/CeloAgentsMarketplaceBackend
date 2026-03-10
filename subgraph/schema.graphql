@@ -1,0 +1,42 @@
+type Agent @entity(immutable: false) {
+  id: ID!
+  agentId: BigInt!
+  owner: Bytes!
+  agentWallet: Bytes
+  agentURI: String!
+  registeredAt: BigInt!
+  registeredBlock: BigInt!
+  transactionHash: Bytes!
+  transferCount: Int!
+  uriUpdateCount: Int!
+  metadata: [AgentMetadata!]! @derivedFrom(field: "agent")
+  uriHistory: [AgentURIHistory!]! @derivedFrom(field: "agent")
+}
+
+type AgentMetadata @entity(immutable: false) {
+  id: ID!
+  agent: Agent!
+  metadataKey: String!
+  metadataValue: Bytes!
+  metadataValueString: String!
+  updatedAt: BigInt!
+  updatedBlock: BigInt!
+  transactionHash: Bytes!
+}
+
+type AgentURIHistory @entity(immutable: false) {
+  id: ID!
+  agent: Agent!
+  uri: String!
+  updatedAt: BigInt!
+  updatedBlock: BigInt!
+  updatedBy: Bytes!
+  transactionHash: Bytes!
+}
+
+type RegistryStats @entity(immutable: false) {
+  id: ID!
+  totalAgents: BigInt!
+  lastUpdatedAt: BigInt!
+  lastUpdatedBlock: BigInt!
+}

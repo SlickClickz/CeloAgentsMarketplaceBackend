@@ -1,0 +1,180 @@
+// ─────────────────────────────────────────
+// CAM Database Schema
+// PostgreSQL via Prisma
+// ─────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─────────────────────────────────────────
+// Network enum — mirrors CeloNetwork type
+// ─────────────────────────────────────────
+enum Network {
+  mainnet
+  testnet
+}
+
+enum SkillCategory {
+  stablecoin_savings   @map("stablecoin-savings")
+  yield_optimization   @map("yield-optimization")
+  token_swap           @map("token-swap")
+  cross_chain_transfer @map("cross-chain-transfer")
+  payment_automation   @map("payment-automation")
+  data_oracle          @map("data-oracle")
+  nft_management       @map("nft-management")
+  governance
+  other
+}
+
+enum FlagType {
+  SKILL_MISMATCH
+  INACTIVE
+  NEW_AGENT
+  UNVERIFIED
+}
+
+enum FlagSeverity {
+  info
+  warning
+  critical
+}
+
+// ─────────────────────────────────────────
+// Agent — core identity record
+// One row per agentId+network combination
+// ─────────────────────────────────────────
+model Agent {
+  id                    String    @id @default(cuid())
+  agentId               String
+  network               Network
+  walletAddress         String
+  tokenURI              String
+  name                  String
+  description           String    @db.Text
+  x402Endpoint          String?
+  selfClawVerified      Boolean   @default(false)
+  rawSkillMd            String    @db.Text
+  registrationTimestamp DateTime
+  lastIndexedAt         DateTime  @default(now())
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  // Relations
+  skills                AgentSkill[]
+  score                 AgentScore?
+  scoreHistory          AgentScoreHistory[]
+  flags                 AgentFlagRecord[]
+
+  // Composite unique — same agentId can exist
+  // on both mainnet and testnet
+  @@unique([agentId, network])
+  @@index([network])
+  @@index([walletAddress])
+  @@map("agents")
+}
+
+// ─────────────────────────────────────────
+// AgentSkill — normalized skill records
+// ─────────────────────────────────────────
+model AgentSkill {
+  id          String        @id @default(cuid())
+  agentId     String
+  network     Network
+  name        String
+  description String        @db.Text
+  category    SkillCategory
+  inputTypes  String[]
+  outputTypes String[]
+  version     String
+  createdAt   DateTime      @default(now())
+
+  agent       Agent         @relation(fields: [agentId, network], references: [agentId, network], onDelete: Cascade)
+
+  @@index([agentId, network])
+  @@index([category])
+  @@map("agent_skills")
+}
+
+// ─────────────────────────────────────────
+// AgentScore — latest CAM Score per agent
+// One row per agentId+network — upserted
+// on every scoring cycle
+// ─────────────────────────────────────────
+model AgentScore {
+  id               String   @id @default(cuid())
+  agentId          String
+  network          Network
+  total            Int      // 0-100
+  identityScore    Int      // 0-30
+  executionScore   Int      // 0-40
+  integrityScore   Int      // 0-30
+  lastUpdated      DateTime @default(now())
+
+  agent            Agent    @relation(fields: [agentId, network], references: [agentId, network], onDelete: Cascade)
+
+  @@unique([agentId, network])
+  @@index([network, total])   // for sorted discovery queries
+  @@map("agent_scores")
+}
+
+// ─────────────────────────────────────────
+// AgentScoreHistory — time series of scores
+// Appended on every scoring cycle for
+// trend analysis and audit trail
+// ─────────────────────────────────────────
+model AgentScoreHistory {
+  id               String   @id @default(cuid())
+  agentId          String
+  network          Network
+  total            Int
+  identityScore    Int
+  executionScore   Int
+  integrityScore   Int
+  recordedAt       DateTime @default(now())
+
+  agent            Agent    @relation(fields: [agentId, network], references: [agentId, network], onDelete: Cascade)
+
+  @@index([agentId, network, recordedAt])
+  @@map("agent_score_history")
+}
+
+// ─────────────────────────────────────────
+// AgentFlagRecord — current active flags
+// Replaced on every scoring cycle
+// ─────────────────────────────────────────
+model AgentFlagRecord {
+  id        String       @id @default(cuid())
+  agentId   String
+  network   Network
+  type      FlagType
+  message   String
+  severity  FlagSeverity
+  createdAt DateTime     @default(now())
+
+  agent     Agent        @relation(fields: [agentId, network], references: [agentId, network], onDelete: Cascade)
+
+  @@index([agentId, network])
+  @@map("agent_flags")
+}
+
+// ─────────────────────────────────────────
+// IngesterState — tracks last processed
+// block per network so the ingester can
+// resume after restarts without re-scanning
+// from genesis
+// ─────────────────────────────────────────
+model IngesterState {
+  id             String   @id @default(cuid())
+  network        Network  @unique
+  lastBlock      BigInt
+  lastUpdated    DateTime @updatedAt
+
+  @@map("ingester_state")
+}
