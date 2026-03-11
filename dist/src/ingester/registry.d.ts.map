@@ -1,0 +1,1 @@
+{"version":3,"file":"registry.d.ts","sourceRoot":"","sources":["../../../src/ingester/registry.ts"],"names":[],"mappings":"AAEA,OAAO,EAAiB,WAAW,EAAE,MAAM,eAAe,CAAC;AAyJ3D,wBAAsB,eAAe,CACnC,OAAO,EAAE,WAAW,EACpB,SAAS,EAAE,MAAM,GAChB,OAAO,CAAC,IAAI,CAAC,CAgEf;AAUD,wBAAgB,qBAAqB,IAAI,MAAM,IAAI,CASlD"}
