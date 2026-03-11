@@ -166,7 +166,7 @@ export const env = {
   thirdwebSecretKey: raw.THIRDWEB_SECRET_KEY,
 
   // API server
-  port: raw.PORT,
+  port: parseInt(process.env.PORT ?? "3000", 10),
   rateLimitWindowMs: raw.RATE_LIMIT_WINDOW_MS,
   rateLimitMax: raw.RATE_LIMIT_MAX,
 };

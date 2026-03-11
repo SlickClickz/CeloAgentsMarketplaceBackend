@@ -124,7 +124,7 @@ async function main() {
   // Start API server
   // ─────────────────────────────────────────
   const app = createApp();
-  const server = app.listen(env.port, () => {
+  const server = app.listen(env.port,"0.0.0.0", () => {
     console.log(`✅ API server running on port ${env.port}`);
     console.log(`\n📡 Endpoints:`);
     console.log(`   GET  /api/v1/discovery?query=...&network=mainnet|testnet`);
