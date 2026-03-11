@@ -1,33 +1,30 @@
 "use strict";
+// import { Request, Response, NextFunction } from "express";
+// import { createThirdwebClient, toWei } from "thirdweb";
+// import { celo, celoSepoliaTestnet } from "thirdweb/chains";
+// import { env, chainRegistry, CeloNetwork } from "../config/env";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.requirePayment = requirePayment;
 exports.buildPaymentConfig = buildPaymentConfig;
-const thirdweb_1 = require("thirdweb");
 const env_1 = require("../config/env");
 // ─────────────────────────────────────────
-// Thirdweb client — singleton
-// ─────────────────────────────────────────
-const thirdwebClient = (0, thirdweb_1.createThirdwebClient)({
-    secretKey: env_1.env.thirdwebSecretKey,
-});
-// ─────────────────────────────────────────
-// Build the 402 response payload
+// x402 Payment Required response
+// Follows x402 protocol spec
 // ─────────────────────────────────────────
 function build402Response(config, resource) {
     const chain = env_1.chainRegistry[config.network];
-    const networkName = config.network === "mainnet" ? "base" : "base-sepolia";
-    // Note: x402 uses "base" network naming convention
-    // but we pass Celo contract addresses
     const tokenAddress = config.token === "cUSD"
         ? chain.stablecoins.cUSD
         : chain.stablecoins.USDC;
+    // Convert USD to smallest unit (6 decimals)
+    const amountInUnits = Math.round(config.priceUsd * 1_000_000).toString();
     return {
         x402Version: 1,
         accepts: [
             {
                 scheme: "exact",
-                network: networkName,
-                maxAmountRequired: config.priceWei.toString(),
+                network: config.network === "mainnet" ? "celo" : "celo-sepolia",
+                maxAmountRequired: amountInUnits,
                 resource,
                 description: "Payment required to interact with this agent",
                 mimeType: "application/json",
@@ -44,67 +41,62 @@ function build402Response(config, resource) {
     };
 }
 // ─────────────────────────────────────────
-// Verify payment proof from X-PAYMENT header
-// Thirdweb x402 SDK sends a signed payment
-// proof that we verify before processing
+// Verify payment via tx hash
+// Frontend sends X-Payment-Tx header with
+// the on-chain transaction hash
+// We do a basic structural check here —
+// full on-chain verification can be added
+// in V2 via an RPC receipt lookup
 // ─────────────────────────────────────────
-async function verifyPaymentProof(paymentHeader, config, resource) {
-    try {
-        // Decode base64 payment proof
-        const decoded = Buffer.from(paymentHeader, "base64").toString("utf-8");
-        const proof = JSON.parse(decoded);
-        // Basic structural validation
-        if (!proof.payload || !proof.payload.authorization) {
-            return { valid: false, error: "Malformed payment proof" };
-        }
-        const auth = proof.payload.authorization;
-        // Verify recipient matches agent wallet
-        if (auth.to?.toLowerCase() !== config.recipient.toLowerCase()) {
-            return { valid: false, error: "Payment recipient mismatch" };
-        }
-        // Verify amount meets minimum
-        const paidAmount = BigInt(auth.value ?? "0");
-        if (paidAmount < config.priceWei) {
-            return {
-                valid: false,
-                error: `Insufficient payment: got ${paidAmount}, required ${config.priceWei}`,
-            };
-        }
-        // Verify token address
-        const chain = env_1.chainRegistry[config.network];
-        const expectedToken = config.token === "cUSD"
-            ? chain.stablecoins.cUSD
-            : chain.stablecoins.USDC;
-        if (auth.token?.toLowerCase() !== expectedToken.toLowerCase()) {
-            return { valid: false, error: "Invalid payment token" };
-        }
-        // Verify expiry
-        const deadline = Number(auth.validBefore ?? 0);
-        if (deadline < Math.floor(Date.now() / 1000)) {
-            return { valid: false, error: "Payment proof expired" };
-        }
-        return { valid: true };
+async function verifyPaymentProof(req, config) {
+    const txHash = req.headers["x-payment-tx"];
+    const tokenAddress = req.headers["x-payment-token"];
+    const amount = req.headers["x-payment-amount"];
+    const jobId = req.headers["x-payment-job-id"];
+    if (!txHash) {
+        return { valid: false, error: "Missing X-Payment-Tx header" };
     }
-    catch (err) {
-        return { valid: false, error: `Payment verification failed: ${err.message}` };
+    if (!txHash.startsWith("0x") || txHash.length !== 66) {
+        return { valid: false, error: "Invalid transaction hash format" };
     }
+    if (!tokenAddress || !amount) {
+        return { valid: false, error: "Missing payment token or amount headers" };
+    }
+    // Verify token matches expected
+    const chain = env_1.chainRegistry[config.network];
+    const expectedToken = config.token === "cUSD"
+        ? chain.stablecoins.cUSD
+        : chain.stablecoins.USDC;
+    if (tokenAddress.toLowerCase() !== expectedToken.toLowerCase()) {
+        return { valid: false, error: "Payment token mismatch" };
+    }
+    // Verify amount meets minimum (6 decimals)
+    const paidUnits = parseFloat(amount) * 1_000_000;
+    const requiredUnits = config.priceUsd * 1_000_000;
+    if (paidUnits < requiredUnits) {
+        return {
+            valid: false,
+            error: `Insufficient payment: got ${amount}, required ${config.priceUsd}`,
+        };
+    }
+    return { valid: true };
 }
 // ─────────────────────────────────────────
 // x402 middleware factory
-// Wrap any Express route to require payment
+// Wraps any Express route to require payment
 //
 // Usage:
 //   router.post("/run",
-//     requirePayment(agentPaymentConfig),
+//     requirePayment(config),
 //     runAgentHandler
 //   )
 // ─────────────────────────────────────────
 function requirePayment(config) {
     return async (req, res, next) => {
-        const paymentHeader = req.headers["x-payment"];
+        const hasTxProof = !!req.headers["x-payment-tx"];
         const resource = `${req.protocol}://${req.get("host")}${req.path}`;
-        // No payment header — issue 402 challenge
-        if (!paymentHeader) {
+        // No payment proof — issue 402 challenge
+        if (!hasTxProof) {
             res
                 .status(402)
                 .set("Content-Type", "application/json")
@@ -112,7 +104,7 @@ function requirePayment(config) {
             return;
         }
         // Verify the payment proof
-        const { valid, error } = await verifyPaymentProof(paymentHeader, config, resource);
+        const { valid, error } = await verifyPaymentProof(req, config);
         if (!valid) {
             res.status(402).json({
                 // error: "Payment verification failed",
@@ -121,23 +113,20 @@ function requirePayment(config) {
             });
             return;
         }
-        // Payment verified — attach config to req for
-        // downstream handlers to log/reference if needed
+        // Payment verified — attach to req for downstream handlers
         req.paymentConfig = config;
         req.paymentVerified = true;
+        req.paymentTxHash = req.headers["x-payment-tx"];
         next();
     };
 }
 // ─────────────────────────────────────────
 // Helper — build payment config from
-// agent record (used by hire endpoint)
+// agent record
 // ─────────────────────────────────────────
-function buildPaymentConfig(agentWalletAddress, network, priceUsd = 0.01, // default $0.01 per interaction
-token = "cUSD") {
-    // Convert USD price to wei (stablecoins are 18 decimals on Celo)
-    const priceWei = (0, thirdweb_1.toWei)(priceUsd.toString());
+function buildPaymentConfig(agentWalletAddress, network, priceUsd = 0.01, token = "cUSD") {
     return {
-        priceWei,
+        priceUsd,
         token,
         recipient: agentWalletAddress,
         network,
