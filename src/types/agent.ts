@@ -153,7 +153,7 @@ export interface AgentMetadata {
   registrationTimestamp: Date;
   rawSkillMd?: string;
   rawSkillMdUrl?: string;
-  rawMetadata?: ERC8004Metadata | null; // ← added
+  rawMetadata?: ERC8004Metadata | null; 
 }
 
 export interface CAMScoreBreakdown {
